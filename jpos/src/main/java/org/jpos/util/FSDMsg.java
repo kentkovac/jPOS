@@ -1,6 +1,6 @@
 /*
  * jPOS Project [http://jpos.org]
- * Copyright (C) 2000-2019 jPOS Software SRL
+ * Copyright (C) 2000-2018 jPOS Software SRL
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -18,23 +18,6 @@
 
 package org.jpos.util;
 
-import java.io.ByteArrayInputStream;
-import java.io.EOFException;
-import java.io.FileNotFoundException;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.io.PrintStream;
-import java.net.URL;
-import java.nio.charset.Charset;
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.LinkedHashMap;
-import java.util.Map;
-import java.util.Map.Entry;
-import java.util.Set;
 import org.jdom2.Element;
 import org.jdom2.JDOMException;
 import org.jdom2.input.SAXBuilder;
@@ -42,6 +25,12 @@ import org.jpos.iso.ISOException;
 import org.jpos.iso.ISOUtil;
 import org.jpos.space.Space;
 import org.jpos.space.SpaceFactory;
+
+import java.io.*;
+import java.net.URL;
+import java.nio.charset.Charset;
+import java.util.*;
+import java.util.Map.Entry;
 
 /**
  * General purpose, Field Separator delimited message.
@@ -97,7 +86,8 @@ import org.jpos.space.SpaceFactory;
  * @author Alejandro Revila
  * @author Mark Salter
  * @author Dave Bergert
- * @since 1.4.7
+ * @author Capital One
+ * @since 1.4.8
  */
 @SuppressWarnings("unchecked")
 public class FSDMsg implements Loggeable, Cloneable {
@@ -126,7 +116,7 @@ public class FSDMsg implements Loggeable, Cloneable {
      * Creates a FSDMsg with a specific base path for the message format schema.
      * @param basePath   schema path, for example: "file:src/data/NDC-" looks for a file src/data/NDC-base.xml
      */
-    public FSDMsg (String basePath) {
+    public FSDMsg(String basePath) {
         this (basePath, "base");
     }
 
@@ -136,7 +126,7 @@ public class FSDMsg implements Loggeable, Cloneable {
      * @param basePath   schema path
      * @param baseSchema schema name
      */
-    public FSDMsg (String basePath, String baseSchema) {
+    public FSDMsg(String basePath, String baseSchema) {
         super();
         fields = new LinkedHashMap<>();
         separators = new LinkedHashMap<>();
@@ -182,7 +172,7 @@ public class FSDMsg implements Loggeable, Cloneable {
     public void unsetSeparator(String separatorName) {
         if (!separators.containsKey(separatorName))
             throw new IllegalArgumentException("unsetSeparator was attempted for "+
-                      separatorName+" which was not previously defined.");
+                    separatorName+" which was not previously defined.");
 
         separators.remove(separatorName);
     }
@@ -196,11 +186,12 @@ public class FSDMsg implements Loggeable, Cloneable {
      * @throws JDOMException
      */
     public void unpack (InputStream is)
-        throws IOException, JDOMException {
+            throws IOException, JDOMException {
         try {
             if (is.markSupported())
                 is.mark(READ_BUFFER);
-            unpack (new InputStreamReader(is, charset), getSchema (baseSchema));
+            //unpack (new InputStreamReader(is, charset), getSchema (baseSchema));
+            unpack (is, getSchema (baseSchema));
             if (is.markSupported()) {
                 is.reset();
                 is.skip (readCount);
@@ -222,31 +213,32 @@ public class FSDMsg implements Loggeable, Cloneable {
      * @throws JDOMException
      */
     public void unpack (byte[] b)
-        throws IOException, JDOMException {
+            throws IOException, JDOMException {
         unpack (new ByteArrayInputStream (b));
     }
 
     /**
      * @return message string
-     * @throws org.jdom2.JDOMException
-     * @throws java.io.IOException
+     * @throws JDOMException
+     * @throws IOException
      * @throws ISOException
      */
     public String pack ()
-        throws JDOMException, IOException, ISOException
+            throws JDOMException, IOException, ISOException
     {
         StringBuilder sb = new StringBuilder ();
         pack (getSchema (baseSchema), sb);
         return sb.toString ();
     }
     public byte[] packToBytes ()
-        throws JDOMException, IOException, ISOException
+            throws JDOMException, IOException, ISOException
     {
-        return pack().getBytes(charset);
+        return ISOUtil.hex2byte(pack());
+        //return pack().getBytes(charset);
     }
 
     protected String get (String id, String type, int length, String defValue, String separator)
-        throws ISOException
+            throws ISOException
     {
         String value = fields.get (id);
         if (value == null)
@@ -277,19 +269,14 @@ public class FSDMsg implements Loggeable, Cloneable {
                             + " is too long to fit in field " + id
                             + " whose length is " + length);
 
-                if (isSeparated(separator)) {
-                    // Convert but do not pad if this field ends with a
-                    // separator
-                    value = new String(ISOUtil.hex2byte(value), charset);
-                } else {
-                    value = new String(ISOUtil.hex2byte(ISOUtil.zeropad(
-                            value, length << 1).substring(0, length << 1)), charset);
+                if (!isSeparated(separator)) {
+                    value = ISOUtil.zeropad(value, length << 1).substring(0, length << 1);
                 }
                 break;
         }
 
         if (!isSeparated(separator) || isBinary(type) || EOM_SEPARATOR.equals(separator))
-          return value;
+                return isBinary(type) ? value : ISOUtil.hexString(value.getBytes(charset));
 
         return ISOUtil.blankUnPad(value);
     }
@@ -315,7 +302,7 @@ public class FSDMsg implements Loggeable, Cloneable {
                 throw new IllegalArgumentException("Invalid separator '"+ separator + "'");
             }
         throw new IllegalArgumentException("isSeparated called on separator="+
-                      separator+" which was not previously defined.");
+                separator+" which was not previously defined.");
     }
 
     private boolean isDummySeparator(String separator) {
@@ -349,11 +336,11 @@ public class FSDMsg implements Loggeable, Cloneable {
         }
 
         throw new IllegalArgumentException("getSeparator called on separator="+
-                      separator+" which was not previously defined.");
+                separator+" which was not previously defined.");
     }
 
     protected void pack (Element schema, StringBuilder sb)
-        throws JDOMException, IOException, ISOException
+            throws JDOMException, IOException, ISOException
     {
         String keyOff = "";
         String defaultKey = "";
@@ -364,14 +351,14 @@ public class FSDMsg implements Loggeable, Cloneable {
             // For backward compatibility, look for a separator at the end of the type attribute, if no separator has been defined.
             String separator = elem.getAttributeValue ("separator");
             if (type != null && separator == null) {
-            	separator = getSeparatorType (type);
+                separator = getSeparatorType (type);
             }
             boolean key  = "true".equals (elem.getAttributeValue ("key"));
             Map properties = key ? loadProperties(elem) : Collections.EMPTY_MAP;
             String defValue = elem.getText();
             // If properties were specified, then the defValue contains lots of \n and \t in it. It should just be set to the empty string, or null.
             if (!properties.isEmpty()) {
-            	defValue = defValue.replace("\n", "").replace("\t", "").replace("\r", "");
+                defValue = defValue.replace("\n", "").replace("\t", "").replace("\r", "");
             }
             String value = get (id, type, length, defValue, separator);
             sb.append (value);
@@ -379,11 +366,10 @@ public class FSDMsg implements Loggeable, Cloneable {
             if (isSeparated(separator)) {
                 char c = getSeparator(separator);
                 if (c > 0)
-                    sb.append(c);
+                    sb.append(ISOUtil.hexString(Character.toString(c).getBytes(charset)));
             }
             if (key) {
-                String v = isBinary(type) ? ISOUtil.hexString(value.getBytes(charset)) : value;
-                keyOff = keyOff + normalizeKeyValue(v, properties);
+                keyOff = keyOff + normalizeKeyValue(value, properties);
                 defaultKey += elem.getAttributeValue ("default-key");
             }
         }
@@ -392,24 +378,24 @@ public class FSDMsg implements Loggeable, Cloneable {
     }
 
     private Map loadProperties(Element elem) {
-    	Map props = new HashMap ();
+        Map props = new HashMap ();
         for (Element prop : elem.getChildren ("property")) {
-    		String name = prop.getAttributeValue ("name");
-    		String value = prop.getAttributeValue ("value");
-    		props.put (name, value);
-    	}
-	    return props;
+            String name = prop.getAttributeValue ("name");
+            String value = prop.getAttributeValue ("value");
+            props.put (name, value);
+        }
+        return props;
     }
 
-	  private String normalizeKeyValue(String value, Map<?,String> properties) {
-    	if (properties.containsKey(value)) {
+    private String normalizeKeyValue(String value, Map<?,String> properties) {
+        if (properties.containsKey(value)) {
             return properties.get(value);
-    	}
-    	return ISOUtil.normalize(value);
+        }
+        return ISOUtil.normalize(value);
     }
 
-    protected void unpack (InputStreamReader r, Element schema)
-        throws IOException, JDOMException {
+    protected void unpack (InputStream is, Element schema)
+            throws IOException, JDOMException {
 
         String keyOff = "";
         String defaultKey = "";
@@ -420,13 +406,13 @@ public class FSDMsg implements Loggeable, Cloneable {
             String type  = elem.getAttributeValue ("type").toUpperCase();
             String separator = elem.getAttributeValue ("separator");
             if (/* type != null && */       // can't be null or we would have NPE'ed when .toUpperCase()
-                separator == null) {
-            	separator = getSeparatorType (type);
+                    separator == null) {
+                separator = getSeparatorType (type);
             }
             boolean key  = "true".equals (elem.getAttributeValue ("key"));
             Map properties = key ? loadProperties(elem) : Collections.EMPTY_MAP;
 
-            String value = readField(r, id, length, type, separator);
+            String value = readField(is, id, length, type, separator);
 
             if (key) {
                 keyOff = keyOff + normalizeKeyValue(value, properties);
@@ -436,21 +422,22 @@ public class FSDMsg implements Loggeable, Cloneable {
             // constant fields should have read the constant value
             if ("K".equals(type) && !value.equals (elem.getText()))
                 throw new IllegalArgumentException (
-                    "Field "+id
-                       + " value='"     +value
-                       + "' expected='" + elem.getText () + "'"
+                        "Field "+id
+                                + " value='"     +value
+                                + "' expected='" + elem.getText () + "'"
                 );
         }
         if (keyOff.length() > 0) {
-            unpack(r, getSchema (getId (schema), keyOff, defaultKey));      // recursion
+            unpack(is, getSchema (getId (schema), keyOff, defaultKey));      // recursion
         }
     }
     private String getId (Element e) {
         String s = e.getAttributeValue ("id");
         return s == null ? "" : s;
     }
-    protected String read (InputStreamReader r, int len, String type, String separator)
-        throws IOException
+
+    protected String read (InputStreamReader inputStreamReader, int len, String type, String separator)
+            throws IOException
     {
         StringBuilder sb = new StringBuilder();
         char[] c = new char[1];
@@ -462,7 +449,7 @@ public class FSDMsg implements Loggeable, Cloneable {
             // Grab what's left.
             char[] rest = new char[32];
             int con;
-            while ((con = r.read(rest, 0, rest.length)) >= 0) {
+            while ((con = inputStreamReader.read(rest, 0, rest.length)) >= 0) {
                 readCount += con;
                 if (rest.length == con)
                     sb.append(rest);
@@ -475,7 +462,7 @@ public class FSDMsg implements Loggeable, Cloneable {
              * len bytes from the stream.
              */
             for (int i = 0; i < len; i++) {
-                if (r.read(c) < 0) {
+                if (inputStreamReader.read(c) < 0) {
                     break; // end of stream indicates end of field?
                 }
                 readCount++;
@@ -483,7 +470,7 @@ public class FSDMsg implements Loggeable, Cloneable {
             }
         } else {
             for (int i = 0; i < len; i++) {
-                if (r.read(c) < 0) {
+                if (inputStreamReader.read(c) < 0) {
                     if (!"EOF".equals(separator))
                         throw new EOFException();
                     else {
@@ -501,7 +488,7 @@ public class FSDMsg implements Loggeable, Cloneable {
 
             if (separated && !"EOF".equals(separator)) {
                 // we still need to read the separator and account for it under readCount
-                if (r.read(c) < 0) {
+                if (inputStreamReader.read(c) < 0) {
                     throw new EOFException();
                 } else {
                     readCount++;
@@ -516,15 +503,29 @@ public class FSDMsg implements Loggeable, Cloneable {
         return sb.toString();
     }
 
-    protected String readField (InputStreamReader r, String fieldName, int len,
+    protected String readField (InputStream is, String fieldName, int len,
                                 String type, String separator) throws IOException
     {
-        String fieldValue = read (r, len, type, separator);
+        String fieldValue;
+        byte[] data = new byte[len];
+        byte[] datum = new byte[1];
 
-        if (isBinary(type))
-            fieldValue = ISOUtil.hexString (fieldValue.getBytes (charset));
-        fields.put (fieldName, fieldValue);
-        // System.out.println ("++++ "+fieldName + ":" + fieldValue + " " + type + "," + isBinary(type));
+        for(int pos = 0; pos < len; pos++){
+            if(is.read(datum) < 0){
+                data = Arrays.copyOf(data, pos);
+                break;
+            }
+            else
+                data[pos] = datum[0];
+        }
+
+        if(isBinary(type))
+            fieldValue = ISOUtil.hexString(data);
+        else
+            fieldValue = read(new InputStreamReader(new ByteArrayInputStream(data), charset), len, type, separator);
+
+        fields.put(fieldName, fieldValue);
+
         return fieldValue;
     }
 
@@ -577,8 +578,8 @@ public class FSDMsg implements Loggeable, Cloneable {
         Element e = new Element ("message");
         if (header != null) {
             e.addContent (
-                new Element ("header")
-                    .setText (getHexHeader ())
+                    new Element ("header")
+                            .setText (getHexHeader ())
             );
         }
         for (String fieldName :fields.keySet()) {
@@ -589,15 +590,15 @@ public class FSDMsg implements Loggeable, Cloneable {
         return e;
     }
     protected Element getSchema ()
-        throws JDOMException, IOException {
+            throws JDOMException, IOException {
         return getSchema (baseSchema);
     }
     protected Element getSchema (String message)
-        throws JDOMException, IOException {
+            throws JDOMException, IOException {
         return getSchema (message, "", null);
     }
     protected Element getSchema (String prefix, String suffix, String defSuffix)
-        throws JDOMException, IOException {
+            throws JDOMException, IOException {
         StringBuilder sb = new StringBuilder (basePath);
         sb.append (prefix);
         prefix = sb.toString(); // little hack, we'll reuse later with defSuffix
@@ -621,7 +622,7 @@ public class FSDMsg implements Loggeable, Cloneable {
     }
 
     protected Element loadSchema(String uri, boolean throwex)
-        throws JDOMException, IOException {
+            throws JDOMException, IOException {
         SAXBuilder builder = new SAXBuilder();
         if (uri.startsWith("jar:") && uri.length()>4) {
             InputStream is = schemaResouceInputStream(uri.substring(4));
@@ -644,7 +645,7 @@ public class FSDMsg implements Loggeable, Cloneable {
     }
 
     protected InputStream schemaResouceInputStream(String resource)
-        throws JDOMException, IOException {
+            throws JDOMException, IOException {
         ClassLoader cl = Thread.currentThread().getContextClassLoader();
         cl = cl==null ? ClassLoader.getSystemClassLoader() : cl;
         return cl.getResourceAsStream(resource);
@@ -690,6 +691,6 @@ public class FSDMsg implements Loggeable, Cloneable {
     }
     public void merge (FSDMsg m) {
         for (Entry<String,String> entry: m.fields.entrySet())
-             set (entry.getKey(), entry.getValue());
+            set (entry.getKey(), entry.getValue());
     }
 }
